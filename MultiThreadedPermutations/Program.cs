@@ -1,9 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -11,57 +8,58 @@ namespace MultiThreadedPermutations
 {
     class Program
     {
-        public static volatile bool HasFinished = false;
-        
         static void Main(string[] args)
         {
             ClearPersistence();
 
-            var workerPool = new List<BufferPersistence>
+            if (args.Length == 0)
             {
-                new BufferPersistence()
-            };
+                Console.Out.WriteLine("First argument should be the input set");
+                return;
+            }
+            var options = args[0];
             
-            var resultBuffer = new ResultBuffer();
+            Console.Out.WriteLine("Calculating permutations for: " + options);
 
-            var buffer = "";
-            var delimiter = "-";
+            var client = new MongoClient();
+            var database = client.GetDatabase("planner");
+            var collection = database.GetCollection<BsonDocument>(options +"_permutations");
+            
+            var buffer = new List<BsonDocument>();
 
             var startTime = DateTime.UtcNow;
-            var breakDuration = TimeSpan.FromMilliseconds(1);
+            var breakDuration = TimeSpan.FromMilliseconds(200);
 
             int permutationCount = 0;
-            ForAllPermutation("abcdefghij".ToCharArray(), (permutation, isFinished) =>
+            
+            ForAllPermutation(options.ToCharArray(), (permutation, isFinished) =>
             {
                 permutationCount++;
-                buffer += (buffer.Length == 0 ? "" : delimiter) + string.Join(",", permutation);
+                
+                if (!isFinished)
+                {
+                    buffer.Add(new BsonDocument {{"teamCombination", string.Join("", permutation)}});
+                }
                 
                 if (DateTime.UtcNow - startTime > breakDuration || isFinished)
                 {
-                    resultBuffer.PublishResult(isFinished ? "/" : buffer);
-                    buffer = "";
+                    if (buffer.Count > 0)
+                    {
+                        collection.InsertMany(buffer);
+                        buffer.Clear();   
+                    }
                     startTime = DateTime.UtcNow;
                 }
 
                 if (isFinished)
                 {
                     Console.Out.WriteLine($"Finished from producer!, Created {permutationCount -1} permutations");
-                    resultBuffer.Dispose();
                 }
 
                 return false;
             });
 
-            while (!HasFinished)
-            {
-            }
-
-
-            foreach (var worker in workerPool)
-            {
-                worker.Dispose();
-            }
-            Console.Out.WriteLine("Finished all!" + HasFinished);
+            Console.Out.WriteLine("Finished all!");
         }
 
         private static void ClearPersistence()
