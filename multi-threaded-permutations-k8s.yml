@@ -1,8 +1,26 @@
+
 apiVersion: v1
 kind: Namespace
 metadata:
   name: multi-threaded-permutations
 
+---
+
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  namespace: multi-threaded-permutations
+  name: multi-threaded-permutations-generator
+spec:
+  template:
+    spec:
+      containers:
+        - name: multi-threaded-permutations
+          image: maartendev/multi-threaded-permutations
+      restartPolicy: Never
+  backoffLimit: 4
+  
 ---
 
 ## Database
@@ -87,7 +105,7 @@ spec:
               name: mysql
           volumeMounts:
             - name: persistent-storage
-              mountPath: /var/lib/mysql
+              mountPath: /data/db
       volumes:
         - name: persistent-storage
           persistentVolumeClaim:

@@ -1,8 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data.SqlClient;
+using System.Linq;
 using System.Runtime.CompilerServices;
-using MongoDB.Bson;
-using MongoDB.Driver;
 
 namespace MultiThreadedPermutations
 {
@@ -10,66 +10,111 @@ namespace MultiThreadedPermutations
     {
         static void Main(string[] args)
         {
-            ClearPersistence();
-
             if (args.Length == 0)
             {
                 Console.Out.WriteLine("First argument should be the input set");
                 return;
             }
+
             var options = args[0];
-            
-            Console.Out.WriteLine("Calculating permutations for: " + options);
 
-            var client = new MongoClient();
-            var database = client.GetDatabase("planner");
-            var collection = database.GetCollection<BsonDocument>(options +"_permutations");
-            
-            var buffer = new List<BsonDocument>();
+            var connectionString = @"Data Source=localhost;Initial Catalog=testing;User ID=sa;Password=yourStrong(!)Password";
+            string tableName = $"matches_{options.Length}_teams";
+            var cnn = new SqlConnection(connectionString);
+            cnn.Open();
 
-            var startTime = DateTime.UtcNow;
-            var breakDuration = TimeSpan.FromMilliseconds(200);
+            ClearPersistence(cnn, tableName);
 
+            Console.Out.WriteLine("Cleared persistence!");
+
+
+            var buffer = new List<string>();
+
+            int maxPermutations = GetPossibleCombinations(options);
             int permutationCount = 0;
-            
+
+            int lastInsert = 0;
+
+            Console.Out.WriteLine($"Generating {maxPermutations} permutations for: " + options);
+
             ForAllPermutation(options.ToCharArray(), (permutation, isFinished) =>
             {
                 permutationCount++;
-                
+                lastInsert++;
+
+                PrintProgress(permutationCount, maxPermutations);
+
                 if (!isFinished)
                 {
-                    buffer.Add(new BsonDocument {{"teamCombination", string.Join("", permutation)}});
+                    buffer.Add(string.Join("", permutation));
                 }
-                
-                if (DateTime.UtcNow - startTime > breakDuration || isFinished)
+
+
+                if (lastInsert > 80 || isFinished)
                 {
-                    if (buffer.Count > 0)
-                    {
-                        collection.InsertMany(buffer);
-                        buffer.Clear();   
-                    }
-                    startTime = DateTime.UtcNow;
+                    PersistItems(cnn, tableName, buffer);
+                    buffer.Clear();
+                    lastInsert = 0;
                 }
 
                 if (isFinished)
                 {
-                    Console.Out.WriteLine($"Finished from producer!, Created {permutationCount -1} permutations");
+                    Console.Out.WriteLine($"Finished from producer!, Created {permutationCount - 1} permutations");
                 }
 
                 return false;
             });
+            
+            cnn.Close();
 
             Console.Out.WriteLine("Finished all!");
         }
 
-        private static void ClearPersistence()
+        private static void PersistItems(SqlConnection connection, string tableName, List<string> buffer)
         {
-            var client = new MongoClient();
-            var database = client.GetDatabase("planner");
-            database.DropCollection("schedules");
+            if (buffer.Count == 0) return;
+            
+            string values = string.Join(", ", buffer.Select(x => $"('{x}')"));
+
+            var sqlInsert = $"INSERT INTO {tableName}(combination) VALUES {values}";
+            var command = new SqlCommand(sqlInsert, connection);
+
+            command.ExecuteNonQuery();
+        }
+        
+        private static void ClearPersistence(SqlConnection connection, string tableName)
+        {
+            var sqlInsert = $"DROP TABLE IF EXISTS {tableName}; CREATE table {tableName} (combination varchar(18));";
+            var command = new SqlCommand(sqlInsert, connection);
+
+            command.ExecuteNonQuery();
         }
 
-        public static bool ForAllPermutation<T>(T[] items, Func<T[],bool, bool> funcExecuteAndTellIfShouldStop)
+        private static void PrintProgress(int permutationCount, int maxPermutations)
+        {
+            var progress = permutationCount % (Math.Max(maxPermutations / 1000, 1));
+            if (progress != 0) return;
+
+            var percentage = (double) permutationCount / maxPermutations;
+            Console.Out.WriteLine($"{Math.Round(percentage * 100)}% done ({permutationCount}/{maxPermutations})");
+        }
+
+        private static int GetPossibleCombinations(string dataset)
+        {
+            var input = dataset.Length;
+            var result = 1;
+
+            for (var i = input; i > 0; i--)
+            {
+                result *= i;
+            }
+
+            return result;
+        }
+
+     
+
+        public static bool ForAllPermutation<T>(T[] items, Func<T[], bool, bool> funcExecuteAndTellIfShouldStop)
         {
             int countOfItem = items.Length;
 
@@ -117,7 +162,7 @@ namespace MultiThreadedPermutations
                 }
             }
 
-            funcExecuteAndTellIfShouldStop(new T[]{}, true);
+            funcExecuteAndTellIfShouldStop(new T[] { }, true);
 
             return false;
         }
