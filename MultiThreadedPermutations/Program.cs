@@ -23,7 +23,7 @@ namespace MultiThreadedPermutations
             var cnn = new SqlConnection(connectionString);
             cnn.Open();
 
-            ClearPersistence(cnn, tableName);
+            ClearPersistence(cnn, tableName, options.Length);
 
             Console.Out.WriteLine("Cleared persistence!");
 
@@ -52,7 +52,7 @@ namespace MultiThreadedPermutations
 
                 if (lastInsert > 80 || isFinished)
                 {
-                    PersistItems(cnn, tableName, buffer);
+                    PersistItems(cnn, tableName, options.Length, buffer);
                     buffer.Clear();
                     lastInsert = 0;
                 }
@@ -70,21 +70,26 @@ namespace MultiThreadedPermutations
             Console.Out.WriteLine("Finished all!");
         }
 
-        private static void PersistItems(SqlConnection connection, string tableName, List<string> buffer)
+        private static void PersistItems(SqlConnection connection, string tableName, int amountOfTeams, List<string> buffer)
         {
             if (buffer.Count == 0) return;
-            
-            string values = string.Join(", ", buffer.Select(x => $"('{x}')"));
+            var parts = string.Join(",",Enumerable.Range(1, amountOfTeams).Select(teamId => $"part_{teamId}"));
 
-            var sqlInsert = $"INSERT INTO {tableName}(combination) VALUES {values}";
+            string values = string.Join(", ", buffer.Select(x => $"({string.Join(",", x.ToCharArray().Select(c => $"'{c}'"))})"));
+
+            var sqlInsert = $"INSERT INTO {tableName}({parts}) VALUES {values}";
             var command = new SqlCommand(sqlInsert, connection);
 
             command.ExecuteNonQuery();
         }
         
-        private static void ClearPersistence(SqlConnection connection, string tableName)
+        private static void ClearPersistence(SqlConnection connection, string tableName, int amountOfTeams)
         {
-            var sqlInsert = $"DROP TABLE IF EXISTS {tableName}; CREATE table {tableName} (combination varchar(18));";
+            var columnDeclaration = string.Join(",",Enumerable.Range(1, amountOfTeams).Select(teamId => $"part_{teamId} char NOT NULL"));
+            var columns = string.Join(",",Enumerable.Range(1, amountOfTeams).Select(teamId => $"part_{teamId}"));
+
+            
+            var sqlInsert = $"DROP TABLE IF EXISTS {tableName}; CREATE table {tableName} ({columnDeclaration}, CONSTRAINT pk_{tableName} PRIMARY KEY ({columns}));";
             var command = new SqlCommand(sqlInsert, connection);
 
             command.ExecuteNonQuery();
