@@ -18,7 +18,8 @@ namespace MultiThreadedPermutations
 
             var options = args[0];
 
-            var connectionString = @"Data Source=localhost;Initial Catalog=testing;User ID=sa;Password=yourStrong(!)Password";
+            var connectionString =
+                @"Data Source=localhost;Initial Catalog=testing;User ID=sa;Password=yourStrong(!)Password";
             string tableName = $"matches_{options.Length}_teams";
             var cnn = new SqlConnection(connectionString);
             cnn.Open();
@@ -37,6 +38,9 @@ namespace MultiThreadedPermutations
 
             Console.Out.WriteLine($"Generating {maxPermutations} permutations for: " + options);
 
+            SqlTransaction transaction = cnn.BeginTransaction();
+
+
             ForAllPermutation(options.ToCharArray(), (permutation, isFinished) =>
             {
                 permutationCount++;
@@ -50,9 +54,9 @@ namespace MultiThreadedPermutations
                 }
 
 
-                if (lastInsert > 80 || isFinished)
+                if (lastInsert > 25 || isFinished)
                 {
-                    PersistItems(cnn, tableName, options.Length, buffer);
+                    PersistItems(cnn, tableName, options.Length, transaction, buffer);
                     buffer.Clear();
                     lastInsert = 0;
                 }
@@ -64,32 +68,38 @@ namespace MultiThreadedPermutations
 
                 return false;
             });
-            
+
+            transaction.Commit();
+
             cnn.Close();
 
             Console.Out.WriteLine("Finished all!");
         }
 
-        private static void PersistItems(SqlConnection connection, string tableName, int amountOfTeams, List<string> buffer)
+        private static void PersistItems(SqlConnection connection, string tableName, int amountOfTeams,
+            SqlTransaction transaction, List<string> buffer)
         {
             if (buffer.Count == 0) return;
-            var parts = string.Join(",",Enumerable.Range(1, amountOfTeams).Select(teamId => $"part_{teamId}"));
+            var parts = string.Join(",", Enumerable.Range(1, amountOfTeams).Select(teamId => $"part_{teamId}"));
 
-            string values = string.Join(", ", buffer.Select(x => $"({string.Join(",", x.ToCharArray().Select(c => $"'{c}'"))})"));
+            string values = string.Join(", ",
+                buffer.Select(x => $"({string.Join(",", x.ToCharArray().Select(c => $"'{c}'"))})"));
 
             var sqlInsert = $"INSERT INTO {tableName}({parts}) VALUES {values}";
-            var command = new SqlCommand(sqlInsert, connection);
+            var command = new SqlCommand(sqlInsert, connection, transaction);
 
             command.ExecuteNonQuery();
         }
-        
+
         private static void ClearPersistence(SqlConnection connection, string tableName, int amountOfTeams)
         {
-            var columnDeclaration = string.Join(",",Enumerable.Range(1, amountOfTeams).Select(teamId => $"part_{teamId} char NOT NULL"));
-            var columns = string.Join(",",Enumerable.Range(1, amountOfTeams).Select(teamId => $"part_{teamId}"));
+            var columnDeclaration = string.Join(",",
+                Enumerable.Range(1, amountOfTeams).Select(teamId => $"part_{teamId} char NOT NULL"));
+            var columns = string.Join(",", Enumerable.Range(1, amountOfTeams).Select(teamId => $"part_{teamId}"));
 
-            
-            var sqlInsert = $"DROP TABLE IF EXISTS {tableName}; CREATE table {tableName} ({columnDeclaration}, CONSTRAINT pk_{tableName} PRIMARY KEY ({columns}));";
+
+            var sqlInsert =
+                $"DROP TABLE IF EXISTS {tableName}; CREATE table {tableName} ({columnDeclaration}, CONSTRAINT pk_{tableName} PRIMARY KEY ({columns}));";
             var command = new SqlCommand(sqlInsert, connection);
 
             command.ExecuteNonQuery();
@@ -117,7 +127,6 @@ namespace MultiThreadedPermutations
             return result;
         }
 
-     
 
         public static bool ForAllPermutation<T>(T[] items, Func<T[], bool, bool> funcExecuteAndTellIfShouldStop)
         {

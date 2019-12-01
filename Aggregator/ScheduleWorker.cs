@@ -12,6 +12,8 @@ namespace Aggregator
         private readonly int _amountOfTeams;
         private readonly int _matchesAgainstSameTeam;
 
+        private static readonly int _maxMatchesOnSameSide = 3;
+
         public ScheduleWorker(string threadId, string connectionString, string scheduleTable, int amountOfTeams,
             int matchesAgainstSameTeam)
         {
@@ -26,50 +28,63 @@ namespace Aggregator
             int amountOfWeeks = (_amountOfTeams - 1) * _matchesAgainstSameTeam;
 
             var matchesTable = $"matches_{_amountOfTeams}_teams";
-            
+
 
             var query = BuildSelect(matchesTable, _amountOfTeams, amountOfWeeks);
 
+            var scheduleBuffer = new List<List<IGrouping<int, Match>>>();
             using (SqlConnection writeConnection = new SqlConnection(_connectionString))
             {
                 writeConnection.Open();
-                using (SqlConnection connection = new SqlConnection(_connectionString))
+
+                using (SqlTransaction transaction = writeConnection.BeginTransaction())
                 {
-                    SqlCommand command = new SqlCommand(query, connection) {CommandTimeout = 0};
-                    connection.Open();
-
-
-                    SqlDataReader reader = command.ExecuteReader();
-
-                    var validator = new SchemaValidator();
-                    
-                    while (reader.Read())
+                    using (SqlConnection connection = new SqlConnection(_connectionString))
                     {
-                        Program.ProcessedSchedulesCount++;
+                        SqlCommand command = new SqlCommand(query, connection) {CommandTimeout = 0};
+                        connection.Open();
 
-                        var schedule = Enumerable.Range(1, amountOfWeeks)
-                            .Select(weekNr => reader[$"week_{weekNr}_combination"].ToString()).ToList();
 
-                        if (validator.IsValid(schedule))
+                        SqlDataReader reader = command.ExecuteReader();
+
+                        var validator = new SchemaValidator();
+
+                        while (reader.Read())
                         {
-                            Program.ValidSchedulesCount++;
-                            
-                            PersistSchedule(writeConnection, _scheduleTable, validator.GetMatchesByRound(schedule));
+                            Program.ProcessedSchedulesCount++;
+
+                            var schedule = Enumerable.Range(1, amountOfWeeks)
+                                .Select(weekNr => reader[$"week_{weekNr}_combination"].ToString()).ToList();
+
+                            if (validator.IsValid(schedule))
+                            {
+                                Program.ValidSchedulesCount++;
+                                if (scheduleBuffer.Count > 25)
+                                {
+                                    PersistSchedules(writeConnection, _scheduleTable, transaction, scheduleBuffer);
+                                    scheduleBuffer.Clear();
+                                }
+
+                                scheduleBuffer.Add(validator.GetMatchesByRound(schedule));
+                            }
+
+
+                            if (Program.ProcessedSchedulesCount % 10000 == 0)
+                            {
+                                PrintProgress();
+                            }
                         }
-                        
-                        
-                        if (Program.ProcessedSchedulesCount % 1000000 == 0)
-                        {
-                            PrintProgress();
-                        }
+
+                        PersistSchedules(writeConnection, _scheduleTable, transaction, scheduleBuffer);
+
+                        reader.Close();
                     }
 
+                    transaction.Commit();
 
-                    reader.Close();
+                    PrintProgress();
                 }
 
-
-               
                 writeConnection.Close();
             }
         }
@@ -79,7 +94,8 @@ namespace Aggregator
             var validPercentage =
                 Math.Round((double) Program.ValidSchedulesCount / Program.ProcessedSchedulesCount * 100, 4);
 
-            Console.WriteLine($"{Program.ValidSchedulesCount}/{Program.ProcessedSchedulesCount} {validPercentage}% were valid schemas!");
+            Console.WriteLine(
+                $"{Program.ValidSchedulesCount}/{Program.ProcessedSchedulesCount} {validPercentage}% were valid schemas!");
         }
 
         private static string BuildSelect(string matchesTable, int amountOfTeams, int amountOfWeeks)
@@ -87,77 +103,176 @@ namespace Aggregator
             var select = string.Join(",",
                 Enumerable.Range(1, amountOfWeeks).Select(weekNr =>
                 {
-                    var parts = string.Join("+",Enumerable.Range(1, amountOfTeams).Select(teamId => $"week_{weekNr}.part_{teamId}"));
-                    
+                    var parts = string.Join("+",
+                        Enumerable.Range(1, amountOfTeams).Select(teamId => $"week_{weekNr}.part_{teamId}"));
+
                     return $"{parts} as week_{weekNr}_combination";
                 }));
-            
+
             var joins = string.Join(" ",
                 Enumerable.Range(2, amountOfWeeks - 1).Select(weekNr => $"CROSS JOIN {matchesTable} week_" + weekNr));
 
             var where = "WHERE ";
-            
-            
-            for (int weekIndex = 0; weekIndex < amountOfWeeks; weekIndex += 2)
+
+
+            for (int weekIndex = 0; weekIndex < amountOfWeeks; weekIndex++)
             {
                 int weekNr = weekIndex + 1;
-
-                bool isNotLastRound = (weekNr + 2) < amountOfWeeks;
-                bool isLastRound = (weekNr + 2) >= amountOfWeeks;
 
                 for (int partIndex = 0; partIndex < amountOfTeams; partIndex += 2)
                 {
                     var partNr = partIndex + 1;
-                 
-                    bool isLastStatement = isLastRound && (partIndex + 2) >= amountOfTeams;
-                
-                    var andStatement = isLastStatement ? "" : "AND";
-                    
-                    where +=
-                        $"NOT (week_{weekNr}.part_{partNr} = week_{weekNr + 1}.part_{partNr} AND week_{weekNr}.part_{partNr + 1} = week_{weekNr + 1}.part_{partNr + 1}) AND ";
-                
-                    where +=
-                        $"NOT (week_{weekNr}.part_{partNr} = week_{weekNr + 1}.part_{partNr +1} AND week_{weekNr}.part_{partNr + 1} = week_{weekNr + 1}.part_{partNr}) {andStatement} ";
 
-                    if (isNotLastRound)
+
+                    for (int impossibleWeekIndex = 0; impossibleWeekIndex < amountOfTeams - 2; impossibleWeekIndex++)
                     {
-                        where +=
-                            $"NOT (week_{weekNr + 1}.part_{partNr} = week_{weekNr + 2}.part_{partNr} AND week_{weekNr + 1}.part_{partNr + 1} = week_{weekNr + 2}.part_{partNr + 1}) AND ";
+                        int impossibleWeekNr = weekNr + impossibleWeekIndex + 1;
 
-                        where +=
-                            $"NOT (week_{weekNr + 1}.part_{partNr} = week_{weekNr + 2}.part_{partNr + 1} AND week_{weekNr + 1}.part_{partNr + 1} = week_{weekNr + 2}.part_{partNr}) AND ";   
+                        if (impossibleWeekNr > amountOfWeeks) break;
+
+                        for (int nextPartIndex = 0; nextPartIndex < amountOfTeams; nextPartIndex += 2)
+                        {
+                            var nextPartNr = nextPartIndex + 1;
+
+                            if (nextPartNr > amountOfTeams) break;
+
+
+                            where +=
+                                $"NOT /* NEXT_WEEKS_SHOULD_NOT_PLAY_SAME_SIDES */ (week_{weekNr}.part_{partNr} = week_{impossibleWeekNr}.part_{nextPartNr} AND week_{weekNr}.part_{partNr + 1} = week_{impossibleWeekNr}.part_{nextPartNr + 1}) AND ";
+
+                            where +=
+                                $"NOT /* NEXT_WEEKS_SHOULD_NOT_PLAY_SWITCHED_SIDES */ (week_{weekNr}.part_{partNr} = week_{impossibleWeekNr}.part_{nextPartNr + 1} AND week_{weekNr}.part_{partNr + 1} = week_{impossibleWeekNr}.part_{nextPartNr}) AND ";
+                        }
                     }
                 }
             }
+
+            for (int weekIndex = 0; weekIndex < amountOfWeeks; weekIndex++)
+            {
+                var weekNr = weekIndex + 1;
+
+                var possibleNextPlayMoment = weekNr + (amountOfTeams - 1);
+
+                bool isLastWeek = possibleNextPlayMoment >= amountOfWeeks;
+
+                if (possibleNextPlayMoment > amountOfWeeks) break;
+
+                for (int partIndex = 0; partIndex < amountOfTeams; partIndex += 2)
+                {
+                    var partNr = partIndex + 1;
+
+                    if (partNr > amountOfTeams) break;
+
+
+                    for (int nextPartIndex = 0; nextPartIndex < amountOfTeams; nextPartIndex += 2)
+                    {
+                        var nextPartNr = nextPartIndex + 1;
+
+                        if (nextPartNr > amountOfTeams) break;
+
+                        var isLastStatement = isLastWeek && partNr + 1 == amountOfTeams &&
+                                              nextPartIndex + 2 >= amountOfTeams;
+
+                        var andStatement = isLastStatement ? "" : "AND";
+
+                        where +=
+                            $"NOT /* POSSIBLE_PLAY_MOMENT_NOT_SAME_SIDES */ (week_{weekNr}.part_{partNr} = week_{possibleNextPlayMoment}.part_{nextPartNr} AND week_{weekNr}.part_{partNr + 1} = week_{possibleNextPlayMoment}.part_{nextPartNr + 1}) {andStatement} ";
+                    }
+                }
+            }
+
+            var isFirstWeek = true;
+            for (int weekIndex = 0; weekIndex < amountOfWeeks; weekIndex++)
+            {
+                var weekNr = weekIndex + 1;
+                var prefix = isFirstWeek ? "" : "AND";
+                isFirstWeek = false;
+
+                var isCompleteCheck = false;
+
+                for (int partIndex = 0; partIndex < amountOfTeams; partIndex++)
+                {
+                    var playingSameSideCheck = "AND NOT /* SAME_SIDE_CHECK */(";
+                    
+                    var partNr = partIndex + 1;
+
+                    for (int followingWeekIndex = weekNr; followingWeekIndex < weekNr + _maxMatchesOnSameSide; followingWeekIndex++)
+                    {
+                        var followingWeekNr = followingWeekIndex + 1;
+
+                        
+                        if (followingWeekNr ==  weekNr + _maxMatchesOnSameSide)
+                        {
+                            isCompleteCheck = true;
+                        }
+                        
+                        if (followingWeekNr > amountOfWeeks)
+                        {
+                            isCompleteCheck = false;
+                            break;
+                        }
+
+
+                        var isLastStatement = followingWeekNr == weekNr + _maxMatchesOnSameSide &&
+                                              partNr + 3 >= amountOfTeams;
+                        var andStatement = isLastStatement ? "" : "AND";
+
+                        var hasNextGroup = partNr + 2 <= amountOfTeams;
+                        
+                        var orClause = hasNextGroup
+                            ? $"OR week_{weekNr}.part_{partNr} = week_{followingWeekNr}.part_{partNr + 2}) {andStatement} "
+                            : ")" + andStatement;
+                        
+                        playingSameSideCheck +=
+                            $"(week_{weekNr}.part_{partNr} = week_{followingWeekNr}.part_{partNr} {orClause} ";
+                    }
+                    
+                    playingSameSideCheck += " )";
+
+
+                    where += isCompleteCheck ? playingSameSideCheck : "";
+                    
+                }
+
             
-            var query =$"SELECT {select} FROM {matchesTable} week_1 {joins} {where}";
+            }
+
+            var query = $"SELECT {select} FROM {matchesTable} week_1 {joins} {where}";
 
             return query;
         }
 
-        private static void PersistSchedule(SqlConnection connection, string tableName,
-            List<IGrouping<int, Match>> schedule)
+        private static void PersistSchedules(SqlConnection connection, string tableName, SqlTransaction transaction,
+            List<List<IGrouping<int, Match>>> schedules)
         {
-            var scheduleId = Guid.NewGuid().ToString();
-            var matchesSql = "";
-
-            var firstRound = true;
-            foreach (var round in schedule)
+            var scheduleInserts = "";
+            var isFirstSchedule = true;
+            foreach (var schedule in schedules)
             {
-                matchesSql += firstRound ? "" : "|";
-                firstRound = false;
+                var prefix = isFirstSchedule ? "" : ",";
+                isFirstSchedule = false;
+                var scheduleId = Guid.NewGuid().ToString();
+                var matchesSql = "";
 
-                foreach (var match in round)
+                var firstRound = true;
+                foreach (var round in schedule)
                 {
-                    matchesSql += $"{match.HomeTeam}{match.AwayTeam}";
+                    matchesSql += firstRound ? "" : "|";
+                    firstRound = false;
+
+                    foreach (var match in round)
+                    {
+                        matchesSql += $"{match.HomeTeam}{match.AwayTeam}";
+                    }
                 }
 
+                scheduleInserts += $"{prefix}('{scheduleId}', '{matchesSql}')";
             }
 
 
             var sqlInsert =
-                $"INSERT INTO {tableName}(schedule_id, rounds) VALUES ('{scheduleId}', '{matchesSql}')";
-            var command = new SqlCommand(sqlInsert, connection);
+                $"INSERT INTO {tableName}(schedule_id, rounds) VALUES {scheduleInserts}";
+            var command = new SqlCommand(sqlInsert, connection, transaction);
 
             command.ExecuteNonQuery();
         }
