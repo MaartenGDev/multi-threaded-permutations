@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Data.SqlClient;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
 
@@ -17,6 +19,7 @@ namespace MultiThreadedPermutations
             }
 
             var options = args[0];
+            var amountOfTeams = options.Length;
 
             var connectionString = @"Data Source=localhost;Initial Catalog=testing;User ID=sa;Password=yourStrong(!)Password";
             
@@ -29,17 +32,27 @@ namespace MultiThreadedPermutations
             Console.Out.WriteLine("Cleared persistence!");
 
 
-            var buffer = new List<string>();
+            var table = new DataTable();
+            
+            foreach (var index in Enumerable.Range(1, amountOfTeams))
+            {
+                table.Columns.Add("part_" + index, typeof(char));
+            }
+            
 
             int maxPermutations = GetPossibleCombinations(options);
             int permutationCount = 0;
 
             int lastInsert = 0;
 
+            Stopwatch stopWatch = new Stopwatch();
+            stopWatch.Start();
+            
             Console.Out.WriteLine($"Generating {maxPermutations} permutations for: " + options);
+            
 
-            SqlTransaction transaction = cnn.BeginTransaction();
 
+            var bulk = new SqlBulkCopy(cnn) {DestinationTableName = "matches_8_teams"};
 
             ForAllPermutation(options.ToCharArray(), (permutation, isFinished) =>
             {
@@ -50,14 +63,22 @@ namespace MultiThreadedPermutations
 
                 if (!isFinished)
                 {
-                    buffer.Add(string.Join("", permutation));
+                    DataRow row = table.NewRow();
+                    
+                    foreach (var index in Enumerable.Range(1, amountOfTeams))
+                    {
+                        row["part_" + index] = permutation[index - 1];
+                    }
+                    
+                    table.Rows.Add(row);
                 }
 
 
-                if (lastInsert > 80 || isFinished)
+                if (lastInsert > 100000 || isFinished)
                 {
-                    PersistItems(cnn, tableName, options.Length, transaction, buffer);
-                    buffer.Clear();
+//                    PersistItems(cnn, tableName, options.Length, transaction, buffer);
+                    bulk.WriteToServer(table);
+                    table.Clear();
                     lastInsert = 0;
                 }
 
@@ -69,11 +90,16 @@ namespace MultiThreadedPermutations
                 return false;
             });
 
-            transaction.Commit();
 
             cnn.Close();
 
-            Console.Out.WriteLine("Finished all!");
+            stopWatch.Stop();
+            TimeSpan ts = stopWatch.Elapsed;
+
+            // Format and display the TimeSpan value.
+            string elapsedTime = $"{ts.Hours:00}:{ts.Minutes:00}:{ts.Seconds:00}.{ts.Milliseconds / 10:00}";
+            
+            Console.Out.WriteLine($"Finished all in {elapsedTime}!");
         }
 
         private static void PersistItems(SqlConnection connection, string tableName, int amountOfTeams,
