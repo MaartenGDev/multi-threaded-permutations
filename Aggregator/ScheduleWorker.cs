@@ -181,60 +181,66 @@ namespace Aggregator
                 }
             }
 
-            var isFirstWeek = true;
-            for (int weekIndex = 0; weekIndex < amountOfWeeks; weekIndex++)
+            for (var weekIndex = 0; weekIndex < amountOfWeeks; weekIndex++)
             {
                 var weekNr = weekIndex + 1;
-                var prefix = isFirstWeek ? "" : "AND";
-                isFirstWeek = false;
 
-                var isCompleteCheck = false;
+                var isCompleteCheck = true;
 
-                for (int partIndex = 0; partIndex < amountOfTeams; partIndex++)
+                var playingSameSideCheck = $"AND NOT /* SAME_SIDE_CHECK_WEEK_{weekNr}_to_{weekNr + _maxMatchesOnSameSide} */(";
+
+
+                for (var followingWeekIndex = weekNr;
+                    followingWeekIndex < weekNr + _maxMatchesOnSameSide;
+                    followingWeekIndex++)
                 {
-                    var playingSameSideCheck = "AND NOT /* SAME_SIDE_CHECK */(";
-                    
-                    var partNr = partIndex + 1;
+                    var followingWeekNr = followingWeekIndex + 1;
 
-                    for (int followingWeekIndex = weekNr; followingWeekIndex < weekNr + _maxMatchesOnSameSide; followingWeekIndex++)
+                    if (followingWeekNr > amountOfWeeks)
                     {
-                        var followingWeekNr = followingWeekIndex + 1;
-
-                        
-                        if (followingWeekNr ==  weekNr + _maxMatchesOnSameSide)
-                        {
-                            isCompleteCheck = true;
-                        }
-                        
-                        if (followingWeekNr > amountOfWeeks)
-                        {
-                            isCompleteCheck = false;
-                            break;
-                        }
-
-
-                        var isLastStatement = followingWeekNr == weekNr + _maxMatchesOnSameSide &&
-                                              partNr + 3 >= amountOfTeams;
-                        var andStatement = isLastStatement ? "" : "AND";
-
-                        var hasNextGroup = partNr + 2 <= amountOfTeams;
-                        
-                        var orClause = hasNextGroup
-                            ? $"OR week_{weekNr}.part_{partNr} = week_{followingWeekNr}.part_{partNr + 2}) {andStatement} "
-                            : ")" + andStatement;
-                        
-                        playingSameSideCheck +=
-                            $"(week_{weekNr}.part_{partNr} = week_{followingWeekNr}.part_{partNr} {orClause} ";
+                        isCompleteCheck = false;
+                        break;
                     }
+
+                    var checksForFollowingWeeks = "(";
                     
-                    playingSameSideCheck += " )";
+                    for (var partIndex = 0; partIndex < amountOfTeams; partIndex++)
+                    {
+                        var partNr = partIndex + 1;
 
+                        var currentOrsForStart = "(";
+                        var isFirstOr = true;
+                        
+                        for (var secondPartIndex = partNr % 2 == 0 ? 1 : 0; secondPartIndex < amountOfTeams; secondPartIndex += 2)
+                        {
+                            var secondPartNr = secondPartIndex + 1;
 
-                    where += isCompleteCheck ? playingSameSideCheck : "";
+                            if (secondPartNr > amountOfTeams)
+                            {
+                                break;
+                            }
+
+                            var orOperator = isFirstOr ? "" : " OR ";
+                            currentOrsForStart += $"{orOperator}week_{weekNr}.part_{partNr}=week_{followingWeekNr}.part_{secondPartNr}";
+
+                            isFirstOr = false;
+
+                        }
+
+                        var isLastWeek = followingWeekNr == weekNr + _maxMatchesOnSameSide && partNr == amountOfTeams;
+                        var andOperator = isLastWeek ? "" : " AND ";
+
+                        var groupClosingOperator = partNr == amountOfTeams ? ")" : "";
+
+                        checksForFollowingWeeks += $"{currentOrsForStart}){groupClosingOperator}{andOperator}";
+                    }
+
+                    playingSameSideCheck += checksForFollowingWeeks;
                     
                 }
 
-            
+                where += isCompleteCheck ? playingSameSideCheck + ")" : "";
+
             }
 
             var query = $"SELECT {select} FROM {matchesTable} week_1 {joins} {where}";

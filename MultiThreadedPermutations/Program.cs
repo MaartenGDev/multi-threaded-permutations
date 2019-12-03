@@ -18,8 +18,8 @@ namespace MultiThreadedPermutations
 
             var options = args[0];
 
-            var connectionString =
-                @"Data Source=localhost;Initial Catalog=testing;User ID=sa;Password=yourStrong(!)Password";
+            var connectionString = @"Data Source=localhost;Initial Catalog=testing;User ID=sa;Password=yourStrong(!)Password";
+            
             string tableName = $"matches_{options.Length}_teams";
             var cnn = new SqlConnection(connectionString);
             cnn.Open();
@@ -54,7 +54,7 @@ namespace MultiThreadedPermutations
                 }
 
 
-                if (lastInsert > 25 || isFinished)
+                if (lastInsert > 80 || isFinished)
                 {
                     PersistItems(cnn, tableName, options.Length, transaction, buffer);
                     buffer.Clear();

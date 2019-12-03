@@ -6,6 +6,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Resources", "Resources", "{
 ProjectSection(SolutionItems) = preProject
 	Dockerfile = Dockerfile
 	README.md = README.md
+	multi-threaded-permutations-k8s.yml = multi-threaded-permutations-k8s.yml
 EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aggregator", "Aggregator\Aggregator.csproj", "{A0DBFB1D-0177-4D2C-9532-35BAA362E8E1}"
