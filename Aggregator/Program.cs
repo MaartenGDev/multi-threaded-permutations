@@ -28,7 +28,7 @@ namespace Aggregator
             
             var connectionString =
                 @"Data Source=localhost;Initial Catalog=testing;User ID=sa;Password=yourStrong(!)Password";
-
+            
             var scheduleTable = $"schedule_{amountOfTeams}_teams_{matchesAgainstSameTeam}_matches";
 
 

@@ -10,6 +10,10 @@ namespace MultiThreadedPermutations
 {
     class Program
     {
+        private int generatedCombinations = 0;
+        private int permutationCountLastProgress = 0;
+        private DateTime lastProgressUpdate = DateTime.Now;
+
         static void Main(string[] args)
         {
             if (args.Length == 0)
@@ -18,7 +22,11 @@ namespace MultiThreadedPermutations
                 return;
             }
 
-            var options = args[0];
+            new Program().Work(args[0]);
+        }
+
+        private void Work(string options)
+        {
             var amountOfTeams = options.Length;
 
             var connectionString = @"Data Source=localhost;Initial Catalog=testing;User ID=sa;Password=yourStrong(!)Password";
@@ -33,50 +41,49 @@ namespace MultiThreadedPermutations
 
 
             var table = new DataTable();
-            
+
             foreach (var index in Enumerable.Range(1, amountOfTeams))
             {
                 table.Columns.Add("part_" + index, typeof(char));
             }
-            
 
-            int maxPermutations = GetPossibleCombinations(options);
-            int permutationCount = 0;
+
+            var maxPermutations = GetPossibleCombinations(options);
 
             int lastInsert = 0;
 
             Stopwatch stopWatch = new Stopwatch();
             stopWatch.Start();
-            
+
             Console.Out.WriteLine($"Generating {maxPermutations} permutations for: " + options);
-            
 
 
-            var bulk = new SqlBulkCopy(cnn) {DestinationTableName = "matches_8_teams"};
+            stopWatch.Start();
+            var bulk = new SqlBulkCopy(cnn)
+                {DestinationTableName = $"matches_{amountOfTeams}_teams", BulkCopyTimeout = 0};
 
             ForAllPermutation(options.ToCharArray(), (permutation, isFinished) =>
             {
-                permutationCount++;
+                generatedCombinations++;
                 lastInsert++;
 
-                PrintProgress(permutationCount, maxPermutations);
+                PrintProgress(generatedCombinations, maxPermutations);
 
                 if (!isFinished)
                 {
                     DataRow row = table.NewRow();
-                    
+
                     foreach (var index in Enumerable.Range(1, amountOfTeams))
                     {
                         row["part_" + index] = permutation[index - 1];
                     }
-                    
+
                     table.Rows.Add(row);
                 }
 
 
-                if (lastInsert > 100000 || isFinished)
+                if (lastInsert > 1000000 || isFinished)
                 {
-//                    PersistItems(cnn, tableName, options.Length, transaction, buffer);
                     bulk.WriteToServer(table);
                     table.Clear();
                     lastInsert = 0;
@@ -84,7 +91,7 @@ namespace MultiThreadedPermutations
 
                 if (isFinished)
                 {
-                    Console.Out.WriteLine($"Finished from producer!, Created {permutationCount - 1} permutations");
+                    Console.Out.WriteLine($"Finished from producer!, Created {generatedCombinations - 1} permutations");
                 }
 
                 return false;
@@ -98,26 +105,11 @@ namespace MultiThreadedPermutations
 
             // Format and display the TimeSpan value.
             string elapsedTime = $"{ts.Hours:00}:{ts.Minutes:00}:{ts.Seconds:00}.{ts.Milliseconds / 10:00}";
-            
+
             Console.Out.WriteLine($"Finished all in {elapsedTime}!");
         }
 
-        private static void PersistItems(SqlConnection connection, string tableName, int amountOfTeams,
-            SqlTransaction transaction, List<string> buffer)
-        {
-            if (buffer.Count == 0) return;
-            var parts = string.Join(",", Enumerable.Range(1, amountOfTeams).Select(teamId => $"part_{teamId}"));
-
-            string values = string.Join(", ",
-                buffer.Select(x => $"({string.Join(",", x.ToCharArray().Select(c => $"'{c}'"))})"));
-
-            var sqlInsert = $"INSERT INTO {tableName}({parts}) VALUES {values}";
-            var command = new SqlCommand(sqlInsert, connection, transaction);
-
-            command.ExecuteNonQuery();
-        }
-
-        private static void ClearPersistence(SqlConnection connection, string tableName, int amountOfTeams)
+        private void ClearPersistence(SqlConnection connection, string tableName, int amountOfTeams)
         {
             var columnDeclaration = string.Join(",",
                 Enumerable.Range(1, amountOfTeams).Select(teamId => $"part_{teamId} char NOT NULL"));
@@ -131,13 +123,26 @@ namespace MultiThreadedPermutations
             command.ExecuteNonQuery();
         }
 
-        private static void PrintProgress(int permutationCount, int maxPermutations)
+        private void PrintProgress(int permutationCount, int maxPermutations)
         {
             var progress = permutationCount % (Math.Max(maxPermutations / 1000, 1));
             if (progress != 0) return;
 
+            var processedItems = permutationCount - permutationCountLastProgress;
+            var elapsedTime = DateTime.Now - lastProgressUpdate;
+
+            var timeLeft = ((maxPermutations - (double) permutationCount) / processedItems) * elapsedTime;
+
+            var relativeTimeLeft = timeLeft.TotalMinutes < 1 ? $"{timeLeft.TotalSeconds:0}s" :
+                timeLeft.TotalMinutes > 59 ? $"{timeLeft.Hours:0}h" : $"{timeLeft.TotalMinutes:0}m";
+
+
             var percentage = (double) permutationCount / maxPermutations;
-            Console.Out.WriteLine($"{Math.Round(percentage * 100)}% done ({permutationCount}/{maxPermutations})");
+            Console.Out.WriteLine(
+                $"{DateTime.Now} {Math.Round(percentage * 100)}% done ({permutationCount}/{maxPermutations}) {relativeTimeLeft} left");
+
+            permutationCountLastProgress = permutationCount;
+            lastProgressUpdate = DateTime.Now;
         }
 
         private static int GetPossibleCombinations(string dataset)
