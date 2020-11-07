@@ -29,3 +29,9 @@ Server:
 ./Aggregator/Aggregator > Aggregator_output.log 2>&1 &
 ```
 9. When the Aggregator(check `Aggregator_output.log`) retrieve the results from the database
+
+## Results based on data
+![Generated schema](./docs/generated_schedule.png)
+
+## Without multi-threaded approach
+![Generated schema](./docs/aws_ec2_server.png)
